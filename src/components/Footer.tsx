@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import Logo from "./Logo";
 
@@ -22,14 +24,9 @@ export default function Footer() {
               <Link href="/builder" className="hover:text-white transition-colors">
                 Report Builder
               </Link>
-              <button
-                onClick={() =>
-                  document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" })
-                }
-                className="text-left hover:text-white transition-colors"
-              >
+              <Link href="/#pricing" className="hover:text-white transition-colors">
                 Pricing
-              </button>
+              </Link>
             </div>
             <div className="flex flex-col gap-2">
               <span className="text-white font-semibold mb-1">Legal</span>
