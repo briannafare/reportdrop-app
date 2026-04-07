@@ -483,7 +483,7 @@ export default function Home() {
                 ))}
               </ul>
               <a
-                href="#payment"
+                href="https://buy.stripe.com/3cI6oH3rt1AT3CI5hL9bO05"
                 id="payment"
                 className="block w-full bg-blue-500 text-white py-3.5 rounded-xl font-semibold text-lg hover:bg-blue-600 transition-colors"
               >
