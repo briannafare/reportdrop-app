@@ -12,8 +12,13 @@ import {
   Plus,
   Trash2,
   Loader2,
+  X,
+  LogIn,
+  LogOut,
+  CheckCircle,
 } from "lucide-react";
 import type { ReportData } from "@/components/ReportPDF";
+import type { User } from "@supabase/supabase-js";
 
 function getTodayString() {
   const d = new Date();
@@ -63,9 +68,79 @@ export default function BuilderPage() {
   const [generating, setGenerating] = useState(false);
   const [mounted, setMounted] = useState(false);
 
+  // Auth state
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authSending, setAuthSending] = useState(false);
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
+
+  // Email state
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [clientEmail, setClientEmail] = useState("");
+  const [sendingEmail, setSendingEmail] = useState(false);
+
   useEffect(() => {
     setMounted(true);
+
+    // Lazily import supabase to avoid SSR issues with env vars
+    const initAuth = async () => {
+      try {
+        const { supabase } = await import("@/lib/supabase");
+        const { data: { user } } = await supabase.auth.getUser();
+        setUser(user);
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+          setUser(session?.user ?? null);
+        });
+
+        return () => subscription.unsubscribe();
+      } catch (err) {
+        console.error("Auth init error:", err);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+
+    initAuth();
   }, []);
+
+  const handleSignIn = async () => {
+    if (!authEmail || !authEmail.includes("@")) {
+      toast.error("Please enter a valid email address");
+      return;
+    }
+    setAuthSending(true);
+    try {
+      const { supabase } = await import("@/lib/supabase");
+      const { error } = await supabase.auth.signInWithOtp({
+        email: authEmail,
+        options: {
+          emailRedirectTo: `${window.location.origin}/builder`,
+        },
+      });
+      if (error) throw error;
+      setMagicLinkSent(true);
+      toast.success("Magic link sent! Check your inbox.");
+    } catch (err) {
+      console.error("Sign in error:", err);
+      toast.error("Failed to send magic link. Please try again.");
+    } finally {
+      setAuthSending(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      const { supabase } = await import("@/lib/supabase");
+      await supabase.auth.signOut();
+      setUser(null);
+      toast.success("Signed out");
+    } catch (err) {
+      console.error("Sign out error:", err);
+    }
+  };
 
   const addMetric = () => {
     if (metrics.length < 6) {
@@ -97,6 +172,25 @@ export default function BuilderPage() {
     personalNote,
   }), [clientName, reportDate, brandColor, freelancerName, metrics, wins, challenges, nextWeekFocus, personalNote]);
 
+  const generatePdfBase64 = useCallback(async (): Promise<string> => {
+    const reactPdf = await import("@react-pdf/renderer");
+    const { default: ReportPDF } = await import("@/components/ReportPDF");
+    const React = await import("react");
+    const doc = React.createElement(ReportPDF, { data: reportData });
+    // @ts-expect-error - react-pdf type mismatch with dynamic import
+    const blob = await reactPdf.pdf(doc).toBlob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        // Strip data:application/pdf;base64, prefix
+        resolve(dataUrl.split(",")[1]);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }, [reportData]);
+
   const handleLoadDemo = useCallback(() => {
     setClientName(MOCK_DATA.clientName);
     setFreelancerName(MOCK_DATA.freelancerName);
@@ -110,6 +204,10 @@ export default function BuilderPage() {
   }, []);
 
   const handleGeneratePDF = useCallback(async () => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
     setGenerating(true);
     try {
       const reactPdf = await import("@react-pdf/renderer");
@@ -133,10 +231,46 @@ export default function BuilderPage() {
     } finally {
       setGenerating(false);
     }
-  }, [reportData, reportDate]);
+  }, [reportData, reportDate, user]);
 
   const handleEmailClick = () => {
-    toast.success("Email sent to client! (Demo — email delivery coming soon)");
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    setShowEmailModal(true);
+  };
+
+  const handleSendEmail = async () => {
+    if (!clientEmail || !clientEmail.includes("@")) {
+      toast.error("Please enter a valid client email address");
+      return;
+    }
+    setSendingEmail(true);
+    try {
+      const pdfBase64 = await generatePdfBase64();
+      const res = await fetch("/api/send-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientEmail,
+          clientName: reportData.clientName,
+          freelancerName: reportData.freelancerName,
+          pdfBase64,
+          reportWeek: reportData.reportWeek,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to send");
+      toast.success(`Report emailed to ${clientEmail}!`);
+      setShowEmailModal(false);
+      setClientEmail("");
+    } catch (err) {
+      console.error("Email send error:", err);
+      toast.error("Failed to send email. Please try again.");
+    } finally {
+      setSendingEmail(false);
+    }
   };
 
   const hasContent =
@@ -146,8 +280,88 @@ export default function BuilderPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-bold text-charcoal text-lg">Sign in to continue</h2>
+              <button onClick={() => { setShowAuthModal(false); setMagicLinkSent(false); setAuthEmail(""); }} className="text-gray-400 hover:text-gray-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            {magicLinkSent ? (
+              <div className="text-center py-4">
+                <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-3" />
+                <p className="font-semibold text-charcoal mb-1">Check your inbox!</p>
+                <p className="text-sm text-gray-500">We sent a magic link to <strong>{authEmail}</strong>. Click it to sign in and return to the builder.</p>
+              </div>
+            ) : (
+              <>
+                <p className="text-sm text-gray-500 mb-4">Enter your email to receive a magic link — no password needed.</p>
+                <input
+                  type="email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSignIn()}
+                  placeholder="you@example.com"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  autoFocus
+                />
+                <button
+                  onClick={handleSignIn}
+                  disabled={authSending}
+                  className="w-full flex items-center justify-center gap-2 bg-blue-500 text-white px-4 py-2.5 rounded-lg font-semibold text-sm hover:bg-blue-600 transition-colors disabled:opacity-50"
+                >
+                  {authSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
+                  {authSending ? "Sending..." : "Send Magic Link"}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Email Modal */}
+      {showEmailModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-bold text-charcoal text-lg">Email Report to Client</h2>
+              <button onClick={() => { setShowEmailModal(false); setClientEmail(""); }} className="text-gray-400 hover:text-gray-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              The PDF will be generated and sent as an attachment to your client.
+            </p>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">Client email address</label>
+            <input
+              type="email"
+              value={clientEmail}
+              onChange={(e) => setClientEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSendEmail()}
+              placeholder="client@example.com"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              autoFocus
+            />
+            <button
+              onClick={handleSendEmail}
+              disabled={sendingEmail}
+              className="w-full flex items-center justify-center gap-2 bg-blue-500 text-white px-4 py-2.5 rounded-lg font-semibold text-sm hover:bg-blue-600 transition-colors disabled:opacity-50"
+            >
+              {sendingEmail ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+              {sendingEmail ? "Sending..." : "Send Report"}
+            </button>
+            <p className="text-xs text-gray-400 mt-3 text-center">
+              Sending as {user?.email}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Link
@@ -169,6 +383,26 @@ export default function BuilderPage() {
             >
               Load Demo Data
             </button>
+            {!authLoading && (
+              user ? (
+                <button
+                  onClick={handleSignOut}
+                  className="hidden sm:flex items-center gap-1.5 text-sm text-gray-500 hover:text-charcoal transition-colors border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
+                  title={`Signed in as ${user.email}`}
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span className="hidden md:inline">Sign Out</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowAuthModal(true)}
+                  className="hidden sm:flex items-center gap-1.5 text-sm text-gray-600 hover:text-charcoal transition-colors border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
+                >
+                  <LogIn className="h-3.5 w-3.5" />
+                  Sign In
+                </button>
+              )
+            )}
             <button
               onClick={handleEmailClick}
               className="hidden sm:flex items-center gap-1.5 text-sm text-gray-600 hover:text-charcoal transition-colors border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
@@ -179,6 +413,23 @@ export default function BuilderPage() {
           </div>
         </div>
       </header>
+
+      {/* Auth banner for non-signed-in users */}
+      {!authLoading && !user && (
+        <div className="bg-blue-50 border-b border-blue-100 px-4 py-2.5">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+            <p className="text-sm text-blue-700">
+              Sign in to download and email reports to clients.
+            </p>
+            <button
+              onClick={() => setShowAuthModal(true)}
+              className="text-sm font-semibold text-blue-600 hover:text-blue-700 whitespace-nowrap"
+            >
+              Sign in free →
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         <div className="grid lg:grid-cols-2 gap-6">
@@ -358,7 +609,7 @@ export default function BuilderPage() {
                 ) : (
                   <>
                     <Download className="h-4 w-4" />
-                    Download PDF Report
+                    {user ? "Download PDF Report" : "Sign in to Download"}
                   </>
                 )}
               </button>
@@ -367,7 +618,7 @@ export default function BuilderPage() {
                 className="sm:hidden flex items-center justify-center gap-2 border border-gray-200 text-gray-700 px-6 py-3 rounded-xl font-semibold hover:bg-gray-50 transition-colors"
               >
                 <Mail className="h-4 w-4" />
-                Email to Client
+                {user ? "Email to Client" : "Sign in to Email"}
               </button>
             </div>
           </div>
