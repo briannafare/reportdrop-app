@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import dynamic from "next/dynamic";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import Link from "next/link";
 import Logo from "@/components/Logo";
 import toast from "react-hot-toast";
@@ -12,18 +11,9 @@ import {
   FileText,
   Plus,
   Trash2,
+  Loader2,
 } from "lucide-react";
 import type { ReportData } from "@/components/ReportPDF";
-
-// Dynamic import for PDF (uses browser APIs)
-const PDFDownloadLink = dynamic(
-  () => import("@react-pdf/renderer").then((mod) => mod.PDFDownloadLink),
-  { ssr: false }
-);
-
-const ReportPDF = dynamic(() => import("@/components/ReportPDF"), {
-  ssr: false,
-});
 
 function getTodayString() {
   const d = new Date();
@@ -70,7 +60,12 @@ export default function BuilderPage() {
   const [challenges, setChallenges] = useState("");
   const [nextWeekFocus, setNextWeekFocus] = useState("");
   const [personalNote, setPersonalNote] = useState("");
-  const [useMock, setUseMock] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const addMetric = () => {
     if (metrics.length < 6) {
@@ -90,19 +85,17 @@ export default function BuilderPage() {
     setMetrics(updated);
   };
 
-  const reportData: ReportData = useMock
-    ? MOCK_DATA
-    : {
-        clientName: clientName || "Client Name",
-        reportWeek: getWeekLabel(reportDate),
-        brandColor,
-        freelancerName: freelancerName || "Your Name",
-        metrics,
-        wins,
-        challenges,
-        nextWeekFocus,
-        personalNote,
-      };
+  const reportData: ReportData = useMemo(() => ({
+    clientName: clientName || "Client Name",
+    reportWeek: getWeekLabel(reportDate),
+    brandColor,
+    freelancerName: freelancerName || "Your Name",
+    metrics,
+    wins,
+    challenges,
+    nextWeekFocus,
+    personalNote,
+  }), [clientName, reportDate, brandColor, freelancerName, metrics, wins, challenges, nextWeekFocus, personalNote]);
 
   const handleLoadDemo = useCallback(() => {
     setClientName(MOCK_DATA.clientName);
@@ -113,9 +106,34 @@ export default function BuilderPage() {
     setChallenges(MOCK_DATA.challenges);
     setNextWeekFocus(MOCK_DATA.nextWeekFocus);
     setPersonalNote(MOCK_DATA.personalNote);
-    setUseMock(true);
     toast.success("Demo data loaded!");
   }, []);
+
+  const handleGeneratePDF = useCallback(async () => {
+    setGenerating(true);
+    try {
+      const reactPdf = await import("@react-pdf/renderer");
+      const { default: ReportPDF } = await import("@/components/ReportPDF");
+      const React = await import("react");
+      const doc = React.createElement(ReportPDF, { data: reportData });
+      // @ts-expect-error - react-pdf type mismatch with dynamic import
+      const blob = await reactPdf.pdf(doc).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(reportData.clientName || "report").replace(/\s+/g, "-").toLowerCase()}-report-${reportDate}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("PDF downloaded!");
+    } catch (err) {
+      console.error("PDF generation error:", err);
+      toast.error("Failed to generate PDF. Please try again.");
+    } finally {
+      setGenerating(false);
+    }
+  }, [reportData, reportDate]);
 
   const handleEmailClick = () => {
     toast.success("Email sent to client! (Demo — email delivery coming soon)");
@@ -123,6 +141,8 @@ export default function BuilderPage() {
 
   const hasContent =
     clientName || metrics.some((m) => m.label && m.value) || wins;
+
+  if (!mounted) return null;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -177,10 +197,7 @@ export default function BuilderPage() {
                   <input
                     type="text"
                     value={clientName}
-                    onChange={(e) => {
-                      setClientName(e.target.value);
-                      setUseMock(false);
-                    }}
+                    onChange={(e) => setClientName(e.target.value)}
                     placeholder="Acme Corp"
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
@@ -192,10 +209,7 @@ export default function BuilderPage() {
                   <input
                     type="date"
                     value={reportDate}
-                    onChange={(e) => {
-                      setReportDate(e.target.value);
-                      setUseMock(false);
-                    }}
+                    onChange={(e) => setReportDate(e.target.value)}
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
                 </div>
@@ -206,10 +220,7 @@ export default function BuilderPage() {
                   <input
                     type="text"
                     value={freelancerName}
-                    onChange={(e) => {
-                      setFreelancerName(e.target.value);
-                      setUseMock(false);
-                    }}
+                    onChange={(e) => setFreelancerName(e.target.value)}
                     placeholder="Sarah Mitchell"
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
@@ -222,19 +233,13 @@ export default function BuilderPage() {
                     <input
                       type="color"
                       value={brandColor}
-                      onChange={(e) => {
-                        setBrandColor(e.target.value);
-                        setUseMock(false);
-                      }}
+                      onChange={(e) => setBrandColor(e.target.value)}
                       className="w-10 h-10 rounded-lg border border-gray-200 cursor-pointer p-0.5"
                     />
                     <input
                       type="text"
                       value={brandColor}
-                      onChange={(e) => {
-                        setBrandColor(e.target.value);
-                        setUseMock(false);
-                      }}
+                      onChange={(e) => setBrandColor(e.target.value)}
                       className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                     />
                   </div>
@@ -261,20 +266,14 @@ export default function BuilderPage() {
                     <input
                       type="text"
                       value={m.label}
-                      onChange={(e) => {
-                        updateMetric(i, "label", e.target.value);
-                        setUseMock(false);
-                      }}
+                      onChange={(e) => updateMetric(i, "label", e.target.value)}
                       placeholder="Metric name"
                       className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                     />
                     <input
                       type="text"
                       value={m.value}
-                      onChange={(e) => {
-                        updateMetric(i, "value", e.target.value);
-                        setUseMock(false);
-                      }}
+                      onChange={(e) => updateMetric(i, "value", e.target.value)}
                       placeholder="Value"
                       className="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                     />
@@ -300,10 +299,7 @@ export default function BuilderPage() {
                 </label>
                 <textarea
                   value={wins}
-                  onChange={(e) => {
-                    setWins(e.target.value);
-                    setUseMock(false);
-                  }}
+                  onChange={(e) => setWins(e.target.value)}
                   rows={3}
                   placeholder="What went well this week?"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none"
@@ -315,10 +311,7 @@ export default function BuilderPage() {
                 </label>
                 <textarea
                   value={challenges}
-                  onChange={(e) => {
-                    setChallenges(e.target.value);
-                    setUseMock(false);
-                  }}
+                  onChange={(e) => setChallenges(e.target.value)}
                   rows={2}
                   placeholder="Any blockers or issues?"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none"
@@ -330,10 +323,7 @@ export default function BuilderPage() {
                 </label>
                 <textarea
                   value={nextWeekFocus}
-                  onChange={(e) => {
-                    setNextWeekFocus(e.target.value);
-                    setUseMock(false);
-                  }}
+                  onChange={(e) => setNextWeekFocus(e.target.value)}
                   rows={2}
                   placeholder="What's the plan for next week?"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none"
@@ -345,10 +335,7 @@ export default function BuilderPage() {
                 </label>
                 <textarea
                   value={personalNote}
-                  onChange={(e) => {
-                    setPersonalNote(e.target.value);
-                    setUseMock(false);
-                  }}
+                  onChange={(e) => setPersonalNote(e.target.value)}
                   rows={2}
                   placeholder="A quick personal note for your client"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none"
@@ -358,21 +345,23 @@ export default function BuilderPage() {
 
             {/* Actions */}
             <div className="flex flex-col sm:flex-row gap-3">
-              <PDFDownloadLink
-                document={<ReportPDF data={reportData} />}
-                fileName={`${(reportData.clientName || "report").replace(/\s+/g, "-").toLowerCase()}-report-${reportDate}.pdf`}
-                className="flex-1"
+              <button
+                onClick={handleGeneratePDF}
+                disabled={generating}
+                className="flex-1 flex items-center justify-center gap-2 bg-blue-500 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-600 transition-colors disabled:opacity-50"
               >
-                {({ loading }) => (
-                  <button
-                    disabled={loading}
-                    className="w-full flex items-center justify-center gap-2 bg-blue-500 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-600 transition-colors disabled:opacity-50"
-                  >
+                {generating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Generating PDF...
+                  </>
+                ) : (
+                  <>
                     <Download className="h-4 w-4" />
-                    {loading ? "Generating PDF..." : "Download PDF Report"}
-                  </button>
+                    Download PDF Report
+                  </>
                 )}
-              </PDFDownloadLink>
+              </button>
               <button
                 onClick={handleEmailClick}
                 className="sm:hidden flex items-center justify-center gap-2 border border-gray-200 text-gray-700 px-6 py-3 rounded-xl font-semibold hover:bg-gray-50 transition-colors"
@@ -496,7 +485,7 @@ export default function BuilderPage() {
                     </div>
                   )}
 
-                  {!hasContent && !useMock && (
+                  {!hasContent && (
                     <div className="text-center py-12">
                       <FileText className="h-10 w-10 text-gray-200 mx-auto mb-3" />
                       <p className="text-sm text-gray-400">
